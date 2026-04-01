@@ -1,0 +1,329 @@
+
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>SIGMET Clipped Draw with Cursor & UTC</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+<style>
+body { margin:0; padding:0; font-family:Arial,sans-serif; }
+#sigmetControls { width:100%; margin:10px auto; display:grid; grid-template-columns: repeat(9, 1fr); gap:10px; font-size:14px; }
+.sigmetCell { text-align:center; border:1px solid #ccc; padding:5px; }
+.issueDT-label { color:red; font-weight:bold; }
+#issueDateTime { color:red; border:2px solid red; font-weight:bold; text-align:center; width:80px; background-color:#fff0f0; }
+#map { width:100%; height:60vh; margin-top:10px; }
+#coordsContainer { width:98%; margin:5px auto; display:flex; gap:10px; align-items:flex-start; }
+#coordText { 
+    flex:1; 
+    height:100px; 
+    font-family:monospace; 
+    font-weight:bold;  /* <-- bold text */
+    padding:5px; 
+    resize:none; 
+    overflow:hidden; 
+}
+#copyBtn { padding:5px 10px; font-size:14px; cursor:pointer; height:40px; }
+.point-number { font-weight:bold; color:blue; font-size:16px; }
+</style>
+  <script>
+    function openLink(url) {
+      window.open(url, "_blank"); // Opens link in a new tab
+    }
+  </script>
+  <button onclick="openLink('https://sigmet.hko.gov.hk/ops-sigcoord/')">HONG KONG SITE</button>
+  <button onclick="openLink('https://pmdnmcc.net/websites/DownloadNMCCData.aspx')">DownLoad NMCC DATA</button>
+  <button onclick="openLink('https://mokarachi.github.io/surface/')">Extract Surface Data</button>
+  <button onclick="openLink('https://mokarachi.github.io/temps/')">Extract Temps Data</button>
+  <button onclick="openLink('https://mokarachi.github.io/ptv/')">PTV Report</button>
+  <button onclick="openLink('https://www.microsoft.com')">Forecast</button>
+  <button onclick="openLink('https://www.microsoft.com')">SPD</button>
+  <button onclick="openLink('https://www.microsoft.com')">District Forecast</button>
+  <button onclick="openLink('https://www.microsoft.com')">PNShip</button>
+  <button onclick="openLink('https://www.microsoft.com')">Coastal Belt</button>
+
+
+</head>
+<body>
+
+<div id="sigmetControls">
+  <div class="sigmetCell">SIGMET #</div>
+  <div class="sigmetCell issueDT-label">Date & Time of Issue</div>
+  <div class="sigmetCell">Phenomena</div>
+  <div class="sigmetCell">FCST/OBS</div>
+  <div class="sigmetCell">TOP FL</div>
+  <div class="sigmetCell">STNR/MOV</div>
+  <div class="sigmetCell">Direction</div>
+  <div class="sigmetCell">Intensity</div>
+  <div class="sigmetCell">
+    <label><input type="checkbox" id="showNumbers" checked> Show Point Numbers</label>
+  </div>
+
+  <div class="sigmetCell"><input id="sigmetNumber" type="number" min="1" max="10" style="width:50px" value="1"></div>
+  <div class="sigmetCell"><input id="issueDateTime" type="text" readonly></div>
+  <div class="sigmetCell">
+    <select id="phenomena">
+      <option value="EMBD TS" selected>EMBD TS</option>
+      <option value="OBSC TS">OBSC TS</option>
+      <option value="FRQ TS">FRQ TS</option>
+      <option value="SQL TS">SQL TS</option>
+    </select>
+  </div>
+  <div class="sigmetCell">
+    <select id="fcstObs">
+      <option value="FCST" selected>FCST</option>
+      <option value="OBS">OBS</option>
+    </select>
+  </div>
+  <div class="sigmetCell"><input id="topFL" type="number" maxlength="3" style="width:50px" value="480"></div>
+  <div class="sigmetCell">
+    <select id="stnrMov">
+      <option value="STNR" selected>STNR</option>
+      <option value="MOV">MOV</option>
+    </select>
+  </div>
+  <div class="sigmetCell" style="display:flex; gap:5px; justify-content:center;">
+    <select id="direction" disabled>
+      <option value="N">N</option>
+      <option value="NE">NE</option>
+      <option value="E">E</option>
+      <option value="SE">SE</option>
+      <option value="S">S</option>
+      <option value="SW">SW</option>
+      <option value="W">W</option>
+      <option value="NW">NW</option>
+    </select>
+    <input id="speed" type="number" placeholder="Speed" maxlength="2" disabled>
+  </div>
+  <div class="sigmetCell">
+    <select id="intensity">
+      <option value="INTSF" selected>INTSF</option>
+      <option value="WKN">WKN</option>
+      <option value="NC">NC</option>
+    </select>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<div id="coordsContainer">
+  <textarea id="coordText" readonly>Default FIR SIGMET. Draw a polygon/rectangle inside corridor to see clipped coordinates.</textarea>
+  <button id="copyBtn">Copy</button>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Turf.js/6.5.0/turf.min.js"></script>
+
+<script>
+// ---------------- Map ----------------
+const map = L.map('map').setView([26, 67], 5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 10 }).addTo(map);
+const drawnItems = new L.FeatureGroup(); map.addLayer(drawnItems);
+const drawControl = new L.Control.Draw({
+  draw: { polygon:{allowIntersection:false, showArea:false}, rectangle:true, polyline:false, circle:false, marker:false, circlemarker:false },
+  edit: { featureGroup: drawnItems }
+});
+map.addControl(drawControl);
+
+// ---------------- Cursor ----------------
+const cursorControl = L.control({position:'bottomleft'});
+cursorControl.onAdd = function(){ 
+  this._div=L.DomUtil.create('div'); 
+  this._div.style.cssText='background:rgba(255,255,255,0.9);padding:5px 10px;border:1px solid #ccc;font-family:monospace;font-size:20px;';
+  this._div.textContent='N---- E-----';
+  return this._div;
+};
+cursorControl.addTo(map);
+map.on('mousemove', e=>{ 
+  let lat=Math.round(e.latlng.lat*100).toString().padStart(4,'0');
+  let lng=Math.round(e.latlng.lng*100).toString().padStart(5,'0');
+  cursorControl._div.textContent=`N${lat} E${lng}`;
+});
+
+// ---------------- UTC Timestamp ----------------
+const timeControl = L.control({position:'bottomright'});
+timeControl.onAdd = function(){ 
+  this._div=L.DomUtil.create('div'); 
+  this._div.style.cssText='background:rgba(255,255,255,0.9);padding:5px 10px;border:1px solid #ccc;font-family:monospace;font-size:16px;';
+  return this._div;
+};
+timeControl.addTo(map);
+function updateTime(){ 
+  const now=new Date();
+  let dd=String(now.getUTCDate()).padStart(2,'0');
+  let hh=String(now.getUTCHours()).padStart(2,'0');
+  let mm=String(now.getUTCMinutes()).padStart(2,'0');
+  let ss=String(now.getUTCSeconds()).padStart(2,'0');
+  timeControl._div.textContent=`UTC: ${dd}${hh}${mm}.${ss}Z`;
+}
+setInterval(updateTime,1000); updateTime();
+
+// ---------------- Corridor ----------------
+const corridorCoords=[[65.92,30],[73.32,30],[72.33,28.73],[71.87,27.93],[70.82,27.72],[70.51,28.11],
+[69.37,26.86],[70.20,26.57],[70.05,25.76],[70.66,25.74],[71.02,24.65],[70.88,24.25],
+[70.20,24.41],[68.80,24.27],[68.75,23.94],[68.29,23.88],[67.90,23.42],[67.90,22],
+[67.55,22],[61.62,22],[61.62,24.92],[61.61,25.84],[62.89,28.15],[60.91,29.91],
+[64.16,29.30],[66.36,29.91],[65.92,30]];
+const corridor=turf.polygon([corridorCoords]);
+
+// ---------------- Inputs ----------------
+const sigmetNumber=document.getElementById('sigmetNumber');
+const issueInput=document.getElementById('issueDateTime');
+const phenomena=document.getElementById('phenomena');
+const fcstObsSelect=document.getElementById('fcstObs');
+const topFL=document.getElementById('topFL');
+const stnrMov=document.getElementById('stnrMov');
+const direction=document.getElementById('direction');
+const speed=document.getElementById('speed');
+const intensity=document.getElementById('intensity');
+const coordText=document.getElementById('coordText');
+const showNumbersCheckbox=document.getElementById('showNumbers');
+stnrMov.addEventListener('change',()=>{ direction.disabled=(stnrMov.value!=='MOV'); speed.disabled=(stnrMov.value!=='MOV'); });
+
+// ---------------- Globals ----------------
+let latestCoordStr='';
+let lastPolygon=null;
+let usingPolygon=false;
+let numberMarkers=[];
+
+// ---------------- Format Coord ----------------
+function formatCoord(c){ let lat=Math.round(c[1]*100).toString().padStart(4,'0'); let lng=Math.round(c[0]*100).toString().padStart(5,'0'); return `N${lat} E${lng}`; }
+
+// ---------------- Time Calculation ----------------
+function getStartEndTimes(){
+  const now=new Date();
+  issueInput.value = String(now.getUTCDate()).padStart(2,'0') +
+                     String(now.getUTCHours()).padStart(2,'0') +
+                     String(now.getUTCMinutes()).padStart(2,'0');
+
+  let issue=new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), now.getUTCMinutes()));
+  let fcst=(fcstObsSelect.value==='FCST');
+  let start=new Date(issue.getTime());
+
+  if(fcst){ 
+    // FCST round to next 10min
+    start.setMinutes(Math.floor((start.getMinutes()+15)/10)*10); 
+  } else { 
+    // OBS: subtract 2 min, then round down to previous 5min
+    start.setMinutes(start.getMinutes() - 2);
+    start.setMinutes(Math.floor(start.getMinutes()/5)*5);
+  } 
+
+  let end=new Date(start.getTime()); end.setHours(end.getHours()+4);
+
+  return {
+    startDD:start.getUTCDate(), startHH:start.getUTCHours(), startMM:start.getUTCMinutes(),
+    endDD:end.getUTCDate(), endHH:end.getUTCHours(), endMM:end.getUTCMinutes()
+  };
+}
+
+// ---------------- Build SIGMET ----------------
+function getSigmetInfo(){
+  const t=getStartEndTimes();
+  const sNum=sigmetNumber.value||'';
+  const ph=phenomena.value||'';
+  const fcObs=fcstObsSelect.value||'';
+  const tf=topFL.value||'';
+  const sm=stnrMov.value||'';
+  let dir=direction.value||'';
+  let spd=speed.value||'';
+  if(sm==='MOV'){ if(spd==='') spd='03'; else spd=(spd<10?'0'+spd:spd); } else spd='';
+  let intsty=intensity.value||'';
+
+  let output=`${String(t.startDD).padStart(2,'0')}/${String(t.startHH).padStart(2,'0')}${String(t.startMM).padStart(2,'0')} UTC TO ${String(t.endDD).padStart(2,'0')}${String(t.endHH).padStart(2,'0')}${String(t.endMM).padStart(2,'0')} UTC\n\n`;
+  const now=new Date();
+  let currHH=String(now.getUTCHours()).padStart(2,'0');
+  let currMM=String(now.getUTCMinutes()).padStart(2,'0');
+  output+=`WSPK31 OPKC ${String(t.startDD).padStart(2,'0')}${currHH}${currMM}\n`;
+  output+=`OPKR SIGMET ${sNum} VALID ${String(t.startDD).padStart(2,'0')}${String(t.startHH).padStart(2,'0')}${String(t.startMM).padStart(2,'0')}/${String(t.endDD).padStart(2,'0')}${String(t.endHH).padStart(2,'0')}${String(t.endMM).padStart(2,'0')} OPKC-\n`;
+
+  if(usingPolygon && latestCoordStr!==''){ output+=`OPKR-KARACHI FIR ${ph} ${fcObs} WI ${latestCoordStr} TOP FL${tf} ${sm}`; }
+  else{ output+=`OPKR-KARACHI FIR ${ph} ${fcObs} ENTIRE FIR TOP FL${tf} ${sm}`; }
+
+  if(sm==='MOV'){ output+=` ${dir} ${spd} KT`; }
+  output+=` ${intsty}=`;
+
+
+  if(fcObs==='OBS'){ 
+    let hhmm=String(t.startHH).padStart(2,'0')+String(t.startMM).padStart(2,'0'); 
+    output=output.replace('OBS', `OBS AT ${hhmm}UTC`); 
+  }
+
+  return output;
+}
+
+// ---------------- Update ----------------
+function updateTextarea(){ 
+  coordText.value=getSigmetInfo(); 
+  coordText.style.height='auto'; 
+  coordText.style.height=coordText.scrollHeight+'px'; 
+}
+setInterval(updateTextarea,60000);
+updateTextarea();
+
+// ---------------- Copy Button ----------------
+document.getElementById('copyBtn').addEventListener('click',()=>{
+  navigator.clipboard.writeText(coordText.value);
+  const btn=document.getElementById('copyBtn'); btn.textContent='Copied'; setTimeout(()=>{btn.textContent='Copy';},1000);
+});
+
+// ---------------- Drawing ----------------
+map.on(L.Draw.Event.CREATED, function(e){
+    const layer = e.layer;
+
+    if(lastPolygon) drawnItems.removeLayer(lastPolygon);
+    numberMarkers.forEach(m => drawnItems.removeLayer(m));
+    numberMarkers = [];
+
+    let coords = layer.toGeoJSON().geometry.coordinates[0];
+
+    // Rectangle (2 points) → 4 corners + close
+    if(coords.length === 2){
+        let c = coords[0], d = coords[1];
+        coords = [
+            [c[0], c[1]],
+            [d[0], c[1]],
+            [d[0], d[1]],
+            [c[0], d[1]],
+            [c[0], c[1]]
+        ];
+    }
+
+    const poly = turf.polygon([coords]);
+    const clipped = turf.intersect(poly, corridor);
+
+    if(clipped){
+        latestCoordStr = clipped.geometry.coordinates[0].map(c => formatCoord([c[0], c[1]])).join(' - ');
+        usingPolygon = true;
+
+        lastPolygon = L.polygon(clipped.geometry.coordinates[0].map(c => [c[1], c[0]]), {color:'orange', fillColor:'orange', fillOpacity:0.4}).addTo(drawnItems);
+
+        if(showNumbersCheckbox.checked){
+            clipped.geometry.coordinates[0].forEach((c, i) => {
+                const marker = L.marker([c[1], c[0]], {
+                    icon: L.divIcon({ className:'point-number', html: `<b>${i+1}</b>`, iconSize:[20,20] })
+                }).addTo(drawnItems);
+                numberMarkers.push(marker);
+            });
+        }
+
+        updateTextarea();
+    } else {
+        alert("Polygon outside corridor!");
+        usingPolygon = false;
+        updateTextarea();
+    }
+});
+
+// ---------------- Live Toggle for Numbers ----------------
+showNumbersCheckbox.addEventListener('change', () => {
+    numberMarkers.forEach(m => {
+        if(showNumbersCheckbox.checked) drawnItems.addLayer(m);
+        else drawnItems.removeLayer(m);
+    });
+});
+</script>
+</body>
+</html>
